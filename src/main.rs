@@ -1,6 +1,7 @@
 use std::error::Error;
 
 mod chat;
+mod config;
 
 use crate::chat::chat;
 
