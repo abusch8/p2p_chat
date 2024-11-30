@@ -1,22 +1,16 @@
-use std::io::{stdout, Stdout, Write};
-use crossterm::{
-    cursor::MoveTo,
-    event::{EventStream, KeyModifiers, MouseEvent, MouseEventKind},
-    style::{style, Attribute, Color, PrintStyledContent, Stylize},
-    terminal::{disable_raw_mode, enable_raw_mode, Clear, ClearType},
-};
+use std::{error::Error, io::{self, stdout, Stdout, Write}, time::Duration};
 use libp2p::{futures::StreamExt, gossipsub, noise, swarm::{NetworkBehaviour, SwarmEvent}, tcp, yamux, Multiaddr};
-use std::{error::Error, time::Duration};
 use tracing_subscriber::EnvFilter;
 use tokio::select;
 use futures::FutureExt;
+use chrono::Utc;
 use crossterm::{
     QueueableCommand,
-    event::{Event, KeyEvent, KeyCode},
-    style::Print,
-    terminal,
+    cursor::MoveTo,
+    event::{Event, EventStream, KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind},
+    style::{style, Attribute, Color, Print, PrintStyledContent, Stylize},
+    terminal::{self, disable_raw_mode, enable_raw_mode, Clear, ClearType},
 };
-use chrono::Utc;
 
 use crate::config;
 
@@ -35,7 +29,7 @@ fn hex_to_color(hex: &str) -> Color {
     }
 }
 
-fn print_feed_msg(stdout: &mut Stdout, msg: &str, user: &str, hex: &str, scroll: &mut u16, terminal_size: (u16, u16), cursor_pos: u16) -> Result<(), std::io::Error> {
+fn print_feed_msg(stdout: &mut Stdout, msg: &str, user: &str, hex: &str, scroll: &mut u16, terminal_size: (u16, u16), cursor_pos: u16) -> Result<(), io::Error> {
     stdout
         .queue(MoveTo(0, *scroll))?
         .queue(PrintStyledContent(style(Utc::now().format(DATETIME_FMT)).with(Color::DarkGrey)))?
@@ -50,7 +44,7 @@ fn print_feed_msg(stdout: &mut Stdout, msg: &str, user: &str, hex: &str, scroll:
     Ok(())
 }
 
-fn print_sys_msg(stdout: &mut Stdout, msg: &str, scroll: &mut u16, terminal_size: (u16, u16), cursor_pos: u16) -> Result<(), std::io::Error> {
+fn print_sys_msg(stdout: &mut Stdout, msg: &str, scroll: &mut u16, terminal_size: (u16, u16), cursor_pos: u16) -> Result<(), io::Error> {
     stdout
         .queue(MoveTo(0, *scroll))?
         .queue(PrintStyledContent(style(format!("{} {}", Utc::now().format(DATETIME_FMT), msg).with(Color::DarkGrey))))?
@@ -61,7 +55,7 @@ fn print_sys_msg(stdout: &mut Stdout, msg: &str, scroll: &mut u16, terminal_size
     Ok(())
 }
 
-fn print_user_msg(stdout: &mut Stdout, msg: &str, terminal_size: (u16, u16), cursor_pos: u16) -> Result<(), std::io::Error> {
+fn print_user_msg(stdout: &mut Stdout, msg: &str, terminal_size: (u16, u16), cursor_pos: u16) -> Result<(), io::Error> {
     stdout
         .queue(MoveTo(0, terminal_size.1 - 1))?
         .queue(Clear(ClearType::CurrentLine))?
@@ -162,6 +156,17 @@ pub async fn chat() -> Result<(), Box<dyn Error>> {
                         print_feed_msg(stdout, &msg, &username, &hex, &mut scroll, terminal_size, cursor_pos)?;
                         msg.clear();
                         cursor_pos = 0;
+                        print_user_msg(stdout, &msg, terminal_size, cursor_pos)?;
+                    },
+                    (KeyCode::Backspace, KeyModifiers::ALT) => {
+                        let mut a = msg[..cursor_pos as usize].trim_end().to_string();
+                        let b = &msg[cursor_pos as usize..];
+                        cursor_pos -= cursor_pos - a.len() as u16;
+                        while cursor_pos > 0 && !a.chars().nth(cursor_pos as usize - 1).unwrap().is_whitespace() {
+                            cursor_pos -= 1;
+                            a.remove(cursor_pos as usize);
+                        }
+                        msg = a + b;
                         print_user_msg(stdout, &msg, terminal_size, cursor_pos)?;
                     },
                     (KeyCode::Backspace, _) => {
