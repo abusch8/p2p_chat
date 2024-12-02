@@ -1,4 +1,4 @@
-use std::{error::Error, fs::{File, OpenOptions}, io::{self, stdout, BufRead, Stdout, Write}, time::Duration};
+use std::{error::Error, fs::File, io::{self, stdout, BufRead, Stdout, Write}, path::Path, time::Duration};
 use libp2p::{futures::StreamExt, gossipsub, noise, swarm::{NetworkBehaviour, SwarmEvent}, tcp, yamux, Multiaddr, SwarmBuilder};
 use tracing_subscriber::EnvFilter;
 use tokio::select;
@@ -52,28 +52,29 @@ fn print_log(stdout: &mut Stdout, log: &Vec::<Vec::<u8>>, scroll_pos: u16, termi
             .queue(Print(" "))?
             .queue(Print(&msg))?;
     }
-
     Ok(())
 }
 
-fn read_log(path: &str, log: &mut Vec<Vec<u8>>) {
-    if let Ok(file) = File::open(path) {
+fn read_log(path: &str, log: &mut Vec<Vec<u8>>) -> Result<(), io::Error> {
+    if Path::new(path).exists() {
+        let file = File::open(path)?;
         let mut reader = io::BufReader::new(file);
         let mut buf = Vec::new();
-        while reader.read_until(b'\n', &mut buf).unwrap() != 0 {
+        while reader.read_until(b'\n', &mut buf)? != 0 {
             log.push(buf.clone());
             buf.clear();
         }
     }
+    Ok(())
 }
 
-fn write_log(path: &str, data: &Vec<u8>) {
-    if let Ok(file) = File::create(path) {
-        let mut writer = io::BufWriter::new(file);
-        let mut buf = data.clone();
-        buf.extend(b"\n");
-        let _ = writer.write_all(&buf);
-    }
+fn write_log(path: &str, data: &Vec<u8>) -> Result<(), io::Error> {
+    let file = File::create(path)?;
+    let mut writer = io::BufWriter::new(file);
+    let mut buf = data.clone();
+    buf.extend(b"\n");
+    writer.write_all(&buf)?;
+    Ok(())
 }
 
 fn print_sys(stdout: &mut Stdout, msg: &str, scroll: &mut u16, cursor_pos: u16, terminal_size: (u16, u16)) -> Result<(), io::Error> {
@@ -81,9 +82,7 @@ fn print_sys(stdout: &mut Stdout, msg: &str, scroll: &mut u16, cursor_pos: u16, 
         .queue(MoveTo(0, *scroll))?
         .queue(PrintStyledContent(style(format!("{} {}", Utc::now().format(DATETIME_FMT), msg).with(Color::DarkGrey))))?
         .queue(MoveTo(cursor_pos + 3, terminal_size.1 - 1))?;
-
     *scroll += 1;
-
     Ok(())
 }
 
@@ -94,7 +93,6 @@ fn print_msg(stdout: &mut Stdout, msg: &str, cursor_pos: u16, terminal_size: (u1
         .queue(Print(" > "))?
         .queue(Print(msg))?
         .queue(MoveTo(cursor_pos + 3, terminal_size.1 - 1))?;
-
     Ok(())
 }
 
@@ -109,10 +107,10 @@ pub async fn chat() -> Result<(), Box<dyn Error>> {
     enable_raw_mode()?;
 
     let topic_name = "test-net";
-    let path = &format!("./{}.log", topic_name);
+    let path = &format!("{}.log", topic_name);
 
     let mut log = Vec::<Vec::<u8>>::new();
-    read_log(path, &mut log);
+    read_log(path, &mut log)?;
 
     let stdout = &mut stdout();
     let terminal_size = terminal::size().unwrap();
@@ -168,7 +166,7 @@ pub async fn chat() -> Result<(), Box<dyn Error>> {
                 SwarmEvent::Behaviour(MessageBehaviourEvent::Gossipsub(gossipsub::Event::Message { message, .. })) => {
                     let data = &message.data;
                     log.push(data.clone());
-                    write_log(path, data);
+                    write_log(path, data)?;
                     print_log(stdout, &log, scroll_pos, terminal_size)?;
                 },
                 _ => {},
@@ -201,7 +199,7 @@ pub async fn chat() -> Result<(), Box<dyn Error>> {
                         data.extend_from_slice(&padded_username);
                         data.extend_from_slice(msg.as_bytes());
                         log.push(data.clone());
-                        write_log(topic_name, &data);
+                        write_log(topic_name, &data)?;
                         print_log(stdout, &log, scroll_pos, terminal_size)?;
                         let _ = swarm.behaviour_mut().gossipsub.publish(topic.clone(), data);
                         scroll_pos = 0;
