@@ -136,7 +136,7 @@ pub async fn chat() -> Result<(), Box<dyn Error>> {
                         data.extend_from_slice(&padded_username);
                         data.extend_from_slice(msg.as_bytes());
                         log.push(data.clone());
-                        write_log(topic_name, &data)?;
+                        write_log(path, &data)?;
                         print_log(stdout, &log, scroll_pos, terminal_size)?;
                         let _ = swarm.behaviour_mut().gossipsub.publish(topic.clone(), data);
                         scroll_pos = 0;
