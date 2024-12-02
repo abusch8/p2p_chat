@@ -2966,6 +2966,7 @@ dependencies = [
  "home",
  "lazy_static",
  "libp2p",
+ "regex",
  "rust-ini",
  "tokio",
  "tracing",

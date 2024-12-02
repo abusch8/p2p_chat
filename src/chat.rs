@@ -1,58 +1,21 @@
-use std::{error::Error, fs::File, io::{self, stdout, BufRead, Stdout, Write}, path::Path, time::Duration};
+use std::{error::Error, fs::File, io::{self, stdout, BufRead, Write}, path::Path, time::Duration};
 use libp2p::{futures::StreamExt, gossipsub, noise, swarm::{NetworkBehaviour, SwarmEvent}, tcp, yamux, Multiaddr, SwarmBuilder};
 use tracing_subscriber::EnvFilter;
 use tokio::select;
 use futures::FutureExt;
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use crossterm::{
-    cursor::MoveTo, event::{EnableMouseCapture, Event, EventStream, KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind},
-    style::{style, Attribute, Color, Print, PrintStyledContent, Stylize},
-    terminal::{self, disable_raw_mode, enable_raw_mode, Clear, ClearType},
+    cursor::MoveTo, event::{Event, EventStream, KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind},
+    terminal,
     QueueableCommand,
 };
 
 use crate::config;
-
-const DATETIME_FMT: &str = "%m/%d/%y %H:%M:%S";
+use crate::display::*;
 
 #[derive(NetworkBehaviour)]
 struct MessageBehaviour {
     gossipsub: gossipsub::Behaviour,
-}
-
-fn hex_to_color(hex: &str) -> Color {
-    Color::Rgb {
-        r: u8::from_str_radix(&hex[0..2], 16).unwrap(),
-        g: u8::from_str_radix(&hex[2..4], 16).unwrap(),
-        b: u8::from_str_radix(&hex[4..6], 16).unwrap(),
-    }
-}
-
-fn print_log(stdout: &mut Stdout, log: &Vec::<Vec::<u8>>, scroll_pos: u16, terminal_size: (u16, u16)) -> Result<(), io::Error> {
-    stdout
-        .queue(Clear(ClearType::All))?;
-
-    let x: usize = 0;
-    let y: usize = if log.len() > terminal_size.1 as usize - 1 { terminal_size.1 as usize - 1 } else { log.len() };
-
-    for i in x..y {
-        let data = &log[log.len() - (y + scroll_pos as usize) + i];
-
-        let ts_bytes: [u8; 8] = data[0..8].try_into().unwrap();
-        let dt = DateTime::from_timestamp(i64::from_be_bytes(ts_bytes), 0).unwrap();
-        let hex = String::from_utf8_lossy(&data[8..14]);
-        let username = String::from_utf8_lossy(&data[14..78]);
-        let msg = String::from_utf8_lossy(&data[78..]);
-
-        stdout
-            .queue(MoveTo(0, i as u16))?
-            .queue(PrintStyledContent(style(dt.format(DATETIME_FMT)).with(Color::DarkGrey)))?
-            .queue(Print(" "))?
-            .queue(PrintStyledContent(style(username.to_string()).with(hex_to_color(&hex)).attribute(Attribute::Bold)))?
-            .queue(Print(" "))?
-            .queue(Print(&msg))?;
-    }
-    Ok(())
 }
 
 fn read_log(path: &str, log: &mut Vec<Vec<u8>>) -> Result<(), io::Error> {
@@ -77,25 +40,6 @@ fn write_log(path: &str, data: &Vec<u8>) -> Result<(), io::Error> {
     Ok(())
 }
 
-fn print_sys(stdout: &mut Stdout, msg: &str, scroll: &mut u16, cursor_pos: u16, terminal_size: (u16, u16)) -> Result<(), io::Error> {
-    stdout
-        .queue(MoveTo(0, *scroll))?
-        .queue(PrintStyledContent(style(format!("{} {}", Utc::now().format(DATETIME_FMT), msg).with(Color::DarkGrey))))?
-        .queue(MoveTo(cursor_pos + 3, terminal_size.1 - 1))?;
-    *scroll += 1;
-    Ok(())
-}
-
-fn print_msg(stdout: &mut Stdout, msg: &str, cursor_pos: u16, terminal_size: (u16, u16)) -> Result<(), io::Error> {
-    stdout
-        .queue(MoveTo(0, terminal_size.1 - 1))?
-        .queue(Clear(ClearType::CurrentLine))?
-        .queue(Print(" > "))?
-        .queue(Print(msg))?
-        .queue(MoveTo(cursor_pos + 3, terminal_size.1 - 1))?;
-    Ok(())
-}
-
 pub async fn chat() -> Result<(), Box<dyn Error>> {
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env())
@@ -103,8 +47,6 @@ pub async fn chat() -> Result<(), Box<dyn Error>> {
 
     let username = &*config::USERNAME;
     let hex = &*config::HEX;
-
-    enable_raw_mode()?;
 
     let topic_name = "test-net";
     let path = &format!("{}.log", topic_name);
@@ -115,11 +57,7 @@ pub async fn chat() -> Result<(), Box<dyn Error>> {
     let stdout = &mut stdout();
     let terminal_size = terminal::size().unwrap();
 
-    stdout
-        .queue(EnableMouseCapture)?
-        .queue(Clear(ClearType::All))?
-        .queue(MoveTo(0, terminal_size.1 - 1))?
-        .queue(Print(" > "))?;
+    init_display(stdout, terminal_size)?;
 
     let mut swarm = SwarmBuilder::with_new_identity()
         .with_tokio()
@@ -175,8 +113,7 @@ pub async fn chat() -> Result<(), Box<dyn Error>> {
                 Event::Key(KeyEvent { code, modifiers, .. }) => match (code, modifiers) {
                     (KeyCode::Char('c'), KeyModifiers::CONTROL) |
                     (KeyCode::Char('d'), KeyModifiers::CONTROL) => {
-                        stdout.queue(Clear(ClearType::All))?;
-                        disable_raw_mode()?;
+                        reset_display(stdout)?;
                         break;
                     },
                     (KeyCode::Char('u'), KeyModifiers::CONTROL) => {
@@ -264,3 +201,4 @@ pub async fn chat() -> Result<(), Box<dyn Error>> {
         stdout.flush().unwrap();
     })
 }
+
