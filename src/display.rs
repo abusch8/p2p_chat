@@ -1,5 +1,5 @@
 use std::io::{self, Stdout};
-use chrono::{DateTime, Utc};
+use chrono::DateTime;
 use crossterm::{
     cursor::MoveTo,
     event::EnableMouseCapture,
@@ -44,29 +44,29 @@ pub fn print_log(stdout: &mut Stdout, log: &Vec::<Vec::<u8>>, scroll_pos: u16, t
     for i in x..y {
         let data = &log[log.len() - (y + scroll_pos as usize) + i];
 
-        let ts_bytes: [u8; 8] = data[0..8].try_into().unwrap();
+        let is_sys: bool = data[0] == 1;
+
+        let ts_bytes: [u8; 8] = data[1..9].try_into().unwrap();
         let dt = DateTime::from_timestamp(i64::from_be_bytes(ts_bytes), 0).unwrap();
-        let hex = String::from_utf8_lossy(&data[8..14]);
-        let username = String::from_utf8_lossy(&data[14..78]);
-        let msg = String::from_utf8_lossy(&data[78..]);
 
-        stdout
-            .queue(MoveTo(0, i as u16))?
-            .queue(PrintStyledContent(style(dt.format(DATETIME_FMT)).with(Color::DarkGrey)))?
-            .queue(Print(" "))?
-            .queue(PrintStyledContent(style(username.to_string()).with(hex_to_color(&hex)).attribute(Attribute::Bold)))?
-            .queue(Print(" "))?
-            .queue(Print(&msg))?;
+        if is_sys {
+            let msg = String::from_utf8_lossy(&data[9..]);
+            stdout
+                .queue(MoveTo(0, i as u16))?
+                .queue(PrintStyledContent(style(format!("{} {}", dt.format(DATETIME_FMT), &msg)).with(Color::DarkGrey)))?;
+        } else {
+            let hex = String::from_utf8_lossy(&data[9..15]);
+            let username = String::from_utf8_lossy(&data[15..79]);
+            let msg = String::from_utf8_lossy(&data[79..]);
+            stdout
+                .queue(MoveTo(0, i as u16))?
+                .queue(PrintStyledContent(style(dt.format(DATETIME_FMT)).with(Color::DarkGrey)))?
+                .queue(Print(" "))?
+                .queue(PrintStyledContent(style(username.to_string()).with(hex_to_color(&hex)).attribute(Attribute::Bold)))?
+                .queue(Print(" "))?
+                .queue(Print(&msg))?;
+        }
     }
-    Ok(())
-}
-
-pub fn print_sys(stdout: &mut Stdout, msg: &str, scroll: &mut u16, cursor_pos: u16, terminal_size: (u16, u16)) -> Result<(), io::Error> {
-    stdout
-        .queue(MoveTo(0, *scroll))?
-        .queue(PrintStyledContent(style(format!("{} {}", Utc::now().format(DATETIME_FMT), msg).with(Color::DarkGrey))))?
-        .queue(MoveTo(cursor_pos + 3, terminal_size.1 - 1))?;
-    *scroll += 1;
     Ok(())
 }
 

@@ -1,4 +1,4 @@
-use std::{error::Error, fs::File, io::{self, stdout, BufRead, Write}, path::Path, time::Duration};
+use std::{error::Error, fs::OpenOptions, io::{self, stdout, BufRead, Write}, path::Path, time::Duration};
 use libp2p::{futures::StreamExt, gossipsub, noise, swarm::{NetworkBehaviour, SwarmEvent}, tcp, yamux, Multiaddr, SwarmBuilder};
 use tracing_subscriber::EnvFilter;
 use tokio::select;
@@ -20,7 +20,7 @@ struct MessageBehaviour {
 
 fn read_log(path: &str, log: &mut Vec<Vec<u8>>) -> Result<(), io::Error> {
     if Path::new(path).exists() {
-        let file = File::open(path)?;
+        let file = OpenOptions::new().read(true).open(path)?;
         let mut reader = io::BufReader::new(file);
         let mut buf = Vec::new();
         while reader.read_until(b'\n', &mut buf)? != 0 {
@@ -32,7 +32,7 @@ fn read_log(path: &str, log: &mut Vec<Vec<u8>>) -> Result<(), io::Error> {
 }
 
 fn write_log(path: &str, data: &Vec<u8>) -> Result<(), io::Error> {
-    let file = File::create(path)?;
+    let file = OpenOptions::new().append(true).create(true).open(path)?;
     let mut writer = io::BufWriter::new(file);
     let mut buf = data.clone();
     buf.extend(b"\n");
@@ -89,7 +89,6 @@ pub async fn chat() -> Result<(), Box<dyn Error>> {
     let mut reader = EventStream::new();
 
     let mut msg = String::new();
-    let mut scroll = 0;
     let mut cursor_pos = 0;
     let mut scroll_pos = 0;
 
@@ -99,7 +98,12 @@ pub async fn chat() -> Result<(), Box<dyn Error>> {
         select! {
             event = swarm.select_next_some() => match event {
                 SwarmEvent::NewListenAddr { address, .. } => {
-                    print_sys(stdout, &format!("Listening on {address:?}"), &mut scroll, cursor_pos, terminal_size)?;
+                    let mut data = Vec::new();
+                    data.extend_from_slice(&[1u8]);
+                    data.extend_from_slice(&Utc::now().timestamp().to_be_bytes());
+                    data.extend_from_slice(&format!("Listening on {address:?}").as_bytes());
+                    log.push(data);
+                    print_log(stdout, &log, scroll_pos, terminal_size)?;
                 },
                 SwarmEvent::Behaviour(MessageBehaviourEvent::Gossipsub(gossipsub::Event::Message { message, .. })) => {
                     let data = &message.data;
@@ -131,6 +135,7 @@ pub async fn chat() -> Result<(), Box<dyn Error>> {
                         let mut padded_username = username.as_bytes().to_vec();
                         padded_username.resize(64, 0);
                         let mut data = Vec::new();
+                        data.extend_from_slice(&[0u8]);
                         data.extend_from_slice(&Utc::now().timestamp().to_be_bytes());
                         data.extend_from_slice(hex.as_bytes());
                         data.extend_from_slice(&padded_username);
