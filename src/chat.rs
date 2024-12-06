@@ -48,17 +48,6 @@ pub async fn chat() -> Result<(), Box<dyn Error>> {
     let username = &*config::USERNAME;
     let hex = &*config::HEX;
 
-    let topic_name = "test-net";
-    let path = &format!("{}.log", topic_name);
-
-    let mut log = Vec::<Vec::<u8>>::new();
-    read_log(path, &mut log)?;
-
-    let stdout = &mut stdout();
-    let terminal_size = terminal::size().unwrap();
-
-    init_display(stdout, terminal_size)?;
-
     let mut swarm = SwarmBuilder::with_new_identity()
         .with_tokio()
         .with_tcp(
@@ -78,10 +67,28 @@ pub async fn chat() -> Result<(), Box<dyn Error>> {
 
     swarm.listen_on("/ip4/0.0.0.0/tcp/0".parse()?)?;
 
-    if let Some(addr) = std::env::args().nth(1) {
-        let remote: Multiaddr = addr.parse()?;
-        swarm.dial(remote)?;
+    let mut topic_name = String::from("test-net");
+    for arg in std::env::args() {
+        match arg.split_once('=') {
+            Some(("--address", addr)) => {
+                let remote: Multiaddr = addr.parse()?;
+                swarm.dial(remote)?;
+            },
+            Some(("--topic", topic)) => {
+                topic_name = topic.to_string();
+            },
+            _ => {},
+        }
     }
+    let path = &format!("{}.log", topic_name);
+
+    let mut log = Vec::<Vec::<u8>>::new();
+    read_log(path, &mut log)?;
+
+    let stdout = &mut stdout();
+    let terminal_size = terminal::size().unwrap();
+
+    init_display(stdout, terminal_size)?;
 
     let topic = gossipsub::IdentTopic::new(topic_name);
     swarm.behaviour_mut().gossipsub.subscribe(&topic)?;
