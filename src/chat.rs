@@ -1,14 +1,10 @@
-use std::{error::Error, fs::OpenOptions, io::{self, stdout, BufRead, Write}, path::Path, time::Duration};
+use std::{error::Error, fs::OpenOptions, io::{self, BufRead, Write}, path::Path, time::Duration};
 use libp2p::{futures::StreamExt, gossipsub, noise, swarm::{NetworkBehaviour, SwarmEvent}, tcp, yamux, Multiaddr, SwarmBuilder};
 use tracing_subscriber::EnvFilter;
 use tokio::select;
 use futures::FutureExt;
 use chrono::Utc;
-use crossterm::{
-    cursor::MoveTo, event::{Event, EventStream, KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind},
-    terminal,
-    QueueableCommand,
-};
+use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
 
 use crate::config;
 use crate::display::*;
@@ -67,7 +63,7 @@ pub async fn chat() -> Result<(), Box<dyn Error>> {
 
     swarm.listen_on("/ip4/0.0.0.0/tcp/0".parse()?)?;
 
-    let mut topic_name = String::from("test-net");
+    let mut topic_name = String::from("default");
     for arg in std::env::args() {
         match arg.split_once('=') {
             Some(("--address", addr)) => {
@@ -85,10 +81,7 @@ pub async fn chat() -> Result<(), Box<dyn Error>> {
     let mut log = Vec::<Vec::<u8>>::new();
     read_log(path, &mut log)?;
 
-    let stdout = &mut stdout();
-    let terminal_size = terminal::size().unwrap();
-
-    init_display(stdout, terminal_size)?;
+    let mut display = Display::new()?;
 
     let topic = gossipsub::IdentTopic::new(topic_name);
     swarm.behaviour_mut().gossipsub.subscribe(&topic)?;
@@ -99,7 +92,7 @@ pub async fn chat() -> Result<(), Box<dyn Error>> {
     let mut cursor_pos = 0;
     let mut scroll_pos = 0;
 
-    print_log(stdout, &log, scroll_pos, terminal_size)?;
+    display.draw(&msg, &log, cursor_pos, scroll_pos)?;
 
     Ok(loop {
         select! {
@@ -110,13 +103,12 @@ pub async fn chat() -> Result<(), Box<dyn Error>> {
                     data.extend_from_slice(&Utc::now().timestamp().to_be_bytes());
                     data.extend_from_slice(&format!("Listening on {address:?}").as_bytes());
                     log.push(data);
-                    print_log(stdout, &log, scroll_pos, terminal_size)?;
+                    display.draw(&msg, &log, cursor_pos, scroll_pos)?;
                 },
                 SwarmEvent::Behaviour(MessageBehaviourEvent::Gossipsub(gossipsub::Event::Message { message, .. })) => {
                     let data = &message.data;
                     log.push(data.clone());
-                    write_log(path, data)?;
-                    print_log(stdout, &log, scroll_pos, terminal_size)?;
+                    display.draw(&msg, &log, cursor_pos, scroll_pos)?;
                 },
                 _ => {},
             },
@@ -124,19 +116,18 @@ pub async fn chat() -> Result<(), Box<dyn Error>> {
                 Event::Key(KeyEvent { code, modifiers, .. }) => match (code, modifiers) {
                     (KeyCode::Char('c'), KeyModifiers::CONTROL) |
                     (KeyCode::Char('d'), KeyModifiers::CONTROL) => {
-                        reset_display(stdout)?;
+                        display.reset()?;
                         break;
                     },
                     (KeyCode::Char('u'), KeyModifiers::CONTROL) => {
                         msg.clear();
                         cursor_pos = 0;
-                        print_msg(stdout, &msg, cursor_pos, terminal_size)?;
+                        display.draw_msg(&msg, cursor_pos)?;
                     },
                     (KeyCode::Char(c), _) => {
                         msg.insert(cursor_pos.into(), c);
                         cursor_pos += 1;
-                        stdout.queue(MoveTo(cursor_pos + 3, terminal_size.1 - 1))?;
-                        print_msg(stdout, &msg, cursor_pos, terminal_size)?;
+                        display.draw_msg(&msg, cursor_pos)?;
                     },
                     (KeyCode::Enter, _) => {
                         let mut padded_username = username.as_bytes().to_vec();
@@ -147,14 +138,13 @@ pub async fn chat() -> Result<(), Box<dyn Error>> {
                         data.extend_from_slice(hex.as_bytes());
                         data.extend_from_slice(&padded_username);
                         data.extend_from_slice(msg.as_bytes());
-                        log.push(data.clone());
-                        write_log(path, &data)?;
-                        print_log(stdout, &log, scroll_pos, terminal_size)?;
-                        let _ = swarm.behaviour_mut().gossipsub.publish(topic.clone(), data);
                         scroll_pos = 0;
                         cursor_pos = 0;
                         msg.clear();
-                        print_msg(stdout, &msg, cursor_pos, terminal_size)?;
+                        log.push(data.clone());
+                        write_log(path, &data)?;
+                        display.draw(&msg, &log, cursor_pos, scroll_pos)?;
+                        let _ = swarm.behaviour_mut().gossipsub.publish(topic.clone(), data);
                     },
                     (KeyCode::Backspace, KeyModifiers::ALT) => {
                         let mut a = msg[..cursor_pos as usize].trim_end().to_string();
@@ -165,7 +155,7 @@ pub async fn chat() -> Result<(), Box<dyn Error>> {
                             a.remove(cursor_pos.into());
                         }
                         msg = a + b;
-                        print_msg(stdout, &msg, cursor_pos, terminal_size)?;
+                        display.draw_msg(&msg, cursor_pos)?;
                     },
                     (KeyCode::Backspace, _) => {
                         if cursor_pos > 0 {
@@ -175,42 +165,41 @@ pub async fn chat() -> Result<(), Box<dyn Error>> {
                                 msg.pop();
                             }
                             cursor_pos -= 1;
-                            print_msg(stdout, &msg, cursor_pos, terminal_size)?;
+                            display.draw_msg(&msg, cursor_pos)?;
                         }
                     },
                     (KeyCode::Right, _) => {
                         if cursor_pos < msg.len() as u16 {
                             cursor_pos += 1;
                         }
-                        stdout.queue(MoveTo(cursor_pos + 3, terminal_size.1 - 1))?;
+                        display.draw_msg(&msg, cursor_pos)?;
                     },
                     (KeyCode::Left, _) => {
                         if cursor_pos > 0 {
                             cursor_pos -= 1;
                         }
-                        stdout.queue(MoveTo(cursor_pos + 3, terminal_size.1 - 1))?;
+                        display.draw_msg(&msg, cursor_pos)?;
                     },
                     _ => {},
                 },
                 Event::Mouse(MouseEvent { kind, .. }) => match kind {
                     MouseEventKind::ScrollUp => {
-                        if log.len() as u16 > terminal_size.1 - 1 && scroll_pos < log.len() as u16 - terminal_size.1 + 1 {
+                        if log.len() as u16 > display.terminal_size.1 - 1 && scroll_pos < log.len() as u16 - display.terminal_size.1 + 1 {
                             scroll_pos += 1;
                         }
-                        print_log(stdout, &log, scroll_pos, terminal_size)?;
+                        display.draw(&msg, &log, cursor_pos, scroll_pos)?;
                     },
                     MouseEventKind::ScrollDown => {
                         if scroll_pos > 0 {
                             scroll_pos -= 1;
                         }
-                        print_log(stdout, &log, scroll_pos, terminal_size)?;
+                        display.draw(&msg, &log, cursor_pos, scroll_pos)?;
                     },
                     _ => {},
                 },
                 _ => {},
             },
         }
-        stdout.flush().unwrap();
     })
 }
 
